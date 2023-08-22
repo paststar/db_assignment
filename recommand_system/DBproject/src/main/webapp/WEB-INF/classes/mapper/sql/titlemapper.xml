@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+  PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.title">
+
+  <!-- user select by userid-->
+  <select id="selectUser" resultType="com.title.DTO.userDTO" parameterType="String">
+    select *
+    from user
+    where userId=#{userId}
+  </select>
+
+  <!-- select movie by user like-->
+  <!-- 같은 직업 -->
+  <select id="selectMovie" resultType="com.title.DTO.titleDTO" parameterType="String">
+    with movieRating(movieTitle,ratingScore) as
+           (
+             select movieTitle, avg(ratingScore)
+             from user natural join movie natural join ratings
+             where occupation = ( select occupation from user where userId=#{userId})
+             group by movieTitle
+           )
+    select movieTitle, ratingScore
+    from movieRating
+    order by ratingScore desc
+      limit 10;
+
+  </select>
+
+  <!-- select movie by user like-->
+  <!-- 같은 나이대 -->
+  <select id="selectMovie2" resultType="com.title.DTO.titleDTO" parameterType="String">
+    with movieRating(movieTitle,ratingScore) as
+           (
+             select movieTitle, avg(ratingScore)
+             from user natural join movie natural join ratings
+             where floor(age/10) = (select floor(age/10) from user where userId = #{userId})
+             group by movieTitle
+           )
+    select movieTitle, ratingScore
+    from movieRating
+    order by ratingScore desc
+      limit 10;
+  </select>
+
+
+  <!-- select movie by user like-->
+  <!-- 추천 시스템 1 : user based CF -->
+  <select id="selectMovie3" resultType="com.title.DTO.titleDTO" parameterType="String">
+      with meanRatings(userId, mean_rating) as
+      (
+          select userId, avg(ratingScore) as mean_rating
+          from ratings
+          group by userId
+      ), PCC as
+      (
+          select u2.userId as userId, sum((u1.ratingScore - m1.mean_rating) * (u2.ratingScore - m2.mean_rating)) / (sqrt(sum(power(u1.ratingScore - m1.mean_rating, 2))) * sqrt(sum(power(u2.ratingScore - m2.mean_rating, 2)))) as pcc
+          from ratings u1 join ratings u2 on u1.movieId = u2.movieId join meanRatings m1 on u1.userId = m1.userId join meanRatings m2 on u2.userId = m2.userId
+          where u1.userId = #{userId} and u1.userId != u2.userId
+          group by u2.userId
+      )
+      select movieTitle, predicted_rating
+      from
+      (
+          select movieid, (select avg(ratingScore) from ratings where userId = #{userId}) +sum(pcc*(ratingScore-mean_rating))/sum(pcc) as predicted_rating
+          from
+          (
+              select *, row_number() over(partition by movieId ORDER BY pcc desc) as row_num
+              from ratings natural join PCC natural join meanRatings
+          ) A
+          where A.row_num <![CDATA[<=]]> 40
+          group by movieid
+      ) B natural join movie
+      order by predicted_rating desc
+      limit 10;
+  </select>
+
+  <!-- select movie by user like-->
+  <!-- 유저가 본 장르 기반 추천 -->
+  <select id="selectMovie4" resultType="com.title.DTO.titleDTO" parameterType="String">
+      with distinctGenre(distinct_genre) as
+               (select distinct(genre)
+                from user natural join ratings  natural join movie_genres
+                where userId = #{userId}
+               ),
+           movieRating(movieTitle,ratingScore) as
+               (
+                   select movieTitle, avg(ratingScore)
+                   from movie natural join ratings natural join movie_genres
+                   where genre in (select distinct_genre from distinctGenre)
+                   group by movieTitle
+               )
+      select movieTitle, ratingScore
+      from movieRating
+      order by ratingScore desc
+      limit 10;
+  </select>
+
+    <!-- select movie by user like-->
+    <!-- 추천 시스템 2 : 유저가 최근에 평점을 남긴 영화와 가장 유사한 영화 추천 (item based CF기반) -->
+    <select id="selectMovie5" resultType="com.title.DTO.titleDTO" parameterType="String">
+        with recentlyRated as
+            (
+                select movieId
+                from ratings
+                where userId = #{userId}
+                order by
+                timestamp desc
+                limit 1
+            ),
+            meanRatings as
+           (
+        select movieId, avg(ratingScore) as mean_rating
+        from ratings
+        group by movieId
+            ),
+            PCC as
+            (
+        select j.movieId, sum((i.ratingScore - m1.mean_rating) * (j.ratingScore - m2.mean_rating)) / (sqrt(sum(power(i.ratingScore - m1.mean_rating, 2))) * sqrt(sum(power(j.ratingScore - m2.mean_rating, 2)))) AS pcc
+        from ratings i join ratings j on i.userId= j.userId join meanRatings m1 on i.movieId = m1.movieId join meanRatings m2 on j.movieId = m2.movieId
+        where i.movieId in (select movieId from recentlyRated) and i.movieId != j.movieId
+        group by j.movieId
+            )
+        select movieTitle, pcc as similarity
+        from PCC natural join movie
+        order by pcc desc
+        limit 10
+    </select>
+
+
+</mapper>
